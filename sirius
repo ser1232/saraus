@@ -1,0 +1,272 @@
+import json, time
+import random, requests
+from loguru import logger
+from tqdm import tqdm
+import asyncio, aiohttp
+
+max_time_check_tx_status = 100 # в секундах. если транза не выдаст статус за это время, она будет считаться исполненной
+
+outfile = ''
+with open(f"{outfile}data/abi/erc20.json", "r") as file:
+    ERC20_ABI = json.load(file)
+
+with open(f"{outfile}data/abi/orbiter_maker.json", "r") as file:
+    ORBITER_MAKER = json.load(file)
+
+with open(f"{outfile}data/wallets.txt", "r") as f:
+    WALLETS = [row.strip() for row in f]
+
+with open(f"{outfile}data/recipients.txt", "r") as f:
+    RECIPIENTS = [row.strip() for row in f]
+
+with open(f"{outfile}data/starknet_address.txt", "r") as f:
+    STARKNET_ADDRESS = [row.strip() for row in f]
+
+with open(f"{outfile}data/proxies.txt", "r") as f:
+    PROXIES = [row.strip() for row in f]
+
+
+STR_DONE    = '✅ '
+STR_CANCEL  = '❌ '
+
+# какие сети активируем в дебанке
+DEBANK_ACTIVATE_CHAINS = [
+    {
+        "eth": "Ethereum"
+    },
+    {
+        "bsc": "BNB Chain"
+    },
+    {
+        "xdai": "Gnosis Chain"
+    },
+    # {
+    #     "heco": "HECO"
+    # },
+    {
+        "matic": "Polygon"
+    },
+    {
+        "ftm": "Fantom"
+    },
+    # {
+    #     "okt": "OKC"
+    # },
+    {
+        "avax": "Avalanche"
+    },
+    {
+        "op": "Optimism"
+    },
+    {
+        "arb": "Arbitrum"
+    },
+    # {
+    #     "celo": "Celo"
+    # },
+    # {
+    #     "movr": "Moonriver"
+    # },
+    # {
+    #     "cro": "Cronos"
+    # },
+    # {
+    #     "boba": "Boba"
+    # },
+    # {
+    #     "metis": "Metis"
+    # },
+    # {
+    #     "btt": "BitTorrent"
+    # },
+    # {
+    #     "aurora": "Aurora"
+    # },
+    # {
+    #     "mobm": "Moonbeam"
+    # },
+    # {
+    #     "sbch": "SmartBch"
+    # },
+    # {
+    #     "fuse": "Fuse"
+    # },
+    {
+        "hmy": "Harmony"
+    },
+    # {
+    #     "klay": "Klaytn"
+    # },
+    # {
+    #     "astar": "Astar"
+    # },
+    # {
+    #     "palm": "Palm"
+    # },
+    # {
+    #     "sdn": "Shiden"
+    # },
+    # {
+    #     "iotx": "IoTeX"
+    # },
+    # {
+    #     "rsk": "RSK"
+    # },
+    # {
+    #     "wan": "Wanchain"
+    # },
+    # {
+    #     "kcc": "KCC"
+    # },
+    # {
+    #     "sgb": "Songbird"
+    # },
+    # {
+    #     "evmos": "EvmOS"
+    # },
+    # {
+    #     "dfk": "DFK"
+    # },
+    # {
+    #     "tlos": "Telos"
+    # },
+    # {
+    #     "swm": "Swimmer"
+    # },
+    {
+        "nova": "Arbitrum Nova"
+    },
+    # {
+    #     "canto": "Canto"
+    # },
+    # {
+    #     "doge": "Dogechain"
+    # },
+    # {
+    #     "kava": "Kava"
+    # },
+    # {
+    #     "step": "Step"
+    # },
+    # {
+    #     "cfx": "Conflux"
+    # },
+    # {
+    #     "mada": "Milkomeda"
+    # },
+    # {
+    #     "brise": "Bitgert"
+    # },
+    # {
+    #     "ckb": "Godwoken"
+    # },
+    # {
+    #     "tomb": "TOMB Chain"
+    # },
+    {
+        "era": "zkSync Era"
+    },
+    # {
+    #     "ron": "Ronin"
+    # },
+    {
+        "pze": "Polygon zkEVM"
+    },
+    # {
+    #     "eos": "EOS EVM"
+    # },
+    {
+        "core": "CORE"
+    },
+    # {
+    #     "wemix": "WEMIX"
+    # },
+    # {
+    #     "etc": "Ethereum Classic"
+    # },
+    # {
+    #     "pls": "Pulse"
+    # },
+    # {
+    #     "flr": "Flare"
+    # },
+    # {
+    #     "fsn": "Fusion"
+    # },
+    # {
+    #     "mtr": "Meter"
+    # },
+    # {
+    #     "rose": "Oasis Emerald"
+    # }
+]
+
+
+def intToDecimal(qty, decimal):
+    return int(qty * int("".join(["1"] + ["0"]*decimal)))
+
+def decimalToInt(qty, decimal):
+    return qty/ int("".join((["1"]+ ["0"]*decimal)))
+
+def call_json(result, outfile):
+    with open(f"{outfile}.json", "w") as file:
+        json.dump(result, file, indent=4, ensure_ascii=False)
+
+def sleeping(from_sleep, to_sleep):
+    x = random.randint(from_sleep, to_sleep)
+    for i in tqdm(range(x), desc='sleep ', bar_format='{desc}: {n_fmt}/{total_fmt}'):
+        time.sleep(1)
+
+RECIPIENTS_WALLETS  = dict(zip(WALLETS, RECIPIENTS))
+STARKNET_WALLETS    = dict(zip(WALLETS, STARKNET_ADDRESS))
+
+ORBITER_AMOUNT = {
+    'ethereum'      : 0.000000000000009001,
+    'optimism'      : 0.000000000000009007,
+    'bsc'           : 0.000000000000009015,
+    'arbitrum'      : 0.000000000000009002,
+    'nova'          : 0.000000000000009016,
+    'polygon'       : 0.000000000000009006,
+    'polygon_zkevm' : 0.000000000000009017,
+    'zksync'        : 0.000000000000009014,
+    'zksync_lite'   : 0.000000000000009003,
+    'starknet'      : 0.000000000000009004,
+}
+
+ORBITER_AMOUNT_STR = {
+    'ethereum'      : '9001',
+    'optimism'      : '9007',
+    'bsc'           : '9015',
+    'arbitrum'      : '9002',
+    'nova'          : '9016',
+    'polygon'       : '9006',
+    'polygon_zkevm' : '9017',
+    'zksync'        : '9014',
+    'zksync_lite'   : '9003',
+    'starknet'      : '9004',
+}
+
+# контракт с X сети в starknet
+CONTRACTS_ORBITER_TO_STARKNET = {
+    'ethereum'      : '0xd9d74a29307cc6fc8bf424ee4217f1a587fbc8dc',
+    'optimism'      : '',
+    'bsc'           : '',
+    'arbitrum'      : '0xd9d74a29307cc6fc8bf424ee4217f1a587fbc8dc',
+    'nova'          : '',
+    'polygon'       : '',
+    'polygon_zkevm' : '',
+    'zksync'        : '',
+    'zksync_lite'   : '',
+}
+
+
+LAYERZERO_CHAINS_ID = {
+    'avalanche' : 106,
+    'polygon'   : 109,
+    'ethereum'  : 101,
+    'bsc'       : 102,
+    'arbitrum'  : 110,
+    'optimism'  : 111,
+    'fantom'    : 112,
+    'aptos'     : 108
+}
